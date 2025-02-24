@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+html {
+    box-sizing: border-box;
+    font-family: system-ui, sans-serif;
+    background-color:#fff;
+}
+
+*, *:before, *:after {
+    box-sizing: inherit;
+}
+
+body {
+    width: 22rem;
+    margin: 0 auto;
+}
+
+/* labels for most controls are to the left */
+label {
+    display: block;
+    text-align: right;
+    margin-right: 1rem;
+}
+input {
+    margin: .25rem 0 .25rem 2%;
+    width: 48%;
+}
+h4 {
+    margin: .25rem 0;
+}
+
+/* group our radios in a div of this style */
+.radios {
+    padding: .5rem 0 0 0;
+    display: grid;
+    grid-template-columns: 50% 50%;
+    & label {
+        text-align:left;
+    }
+    & input {
+        width: 1rem;
+        margin: 0 .5rem .25rem 0;
+    }
+    & > div {
+        text-align: right;
+        margin: 0 1rem 0 0;
+    }
+}
+
+/* Display radio button group as tabs.
+   thanks to: https://codepen.io/istavros/pen/JjgbeW
+ */
+ .rtabs {
+    clear: both;
+    display: inline-block;
+    width: 100%;
+    border-bottom: 1px solid #777;
+    margin: .5rem 0 0 0;
+    padding: 5px 10px 0px;
+    position: relative;
+    & input[type="radio"] {
+        /* this trick hides the actual radio buttons; we just use labels */
+        position: absolute;
+        left: -99999em;
+        & + label {
+            cursor: pointer;
+            float: left;
+            border: 1px solid #aaa;
+            border-bottom: 0;
+            background-color: #fff;
+            margin-right: -1px;
+            padding: .25rem .5rem;
+            position: relative;
+            border-radius: .5em .5em 0 0;
+            background-color: #eee;
+            &:hover {
+                background-color: #ccc;
+            }
+        }
+        &:checked + label {
+            box-shadow: 0 3px 0 -1px #fff;
+            background-color: #fff;
+            border-color: #777;
+            z-index: 1;
+        }
+    }
+}
+.tab_body {
+    border-width: 0 1px 1px 1px;
+    border-color: #777;
+    border-style: solid;
+    padding: 0 0 .5em 0;
+    /* -.25em necessary to close a gap between the body and tabs */
+    margin: -.25em 0 .5em 0;
+}
+        </style>
+
+        <script>
+(() => {addEventListener("DOMContentLoaded", async () => {
+    const d = document;
+    let mo = null;
+    const devname = "MIDI Foot Controller";
+
+    // config read from the controller lives here
+    //
+    // This is not a binary match with the config structure inside
+    // the controller but is similar.
+
+    // In order to keep the UI predictable, this cfg object will have
+    // extra, sometimes conflicting values: i.e. type MOMENTARY_CC
+    // along with a 'bank' property.  Only the button properties related
+    // to the current button type will actually be saved and retrieved.
+    //
+    let cfg = null;
+    let current_bix = 0;            // index of currently-displayed button
+
+    const sysexMsg = 0xF0;
+    const CCMsg = 0xB0;
+    const PCMsg = 0xC0;
+        // Note: Manufacturer ID: 0x7D is reserved for noncommercial use
+        // and is not supposed to be used in any 'released' product.
+        // But there does not seem to be any reasonable alternative for
+        // open-source projects, so I'm cautiously using it.
+        //
+        // If you have an alternative, please get in touch!
+        //
+    const sysexMfgId = 0x7D;
+    const devID = 0x22;             // our device ID (arbitrary?);
+    const EOX = 0xf7;
+
+    const MOMENTARY_CC = 0;
+    const TOGGLE_CC = 1;
+    const SWITCH_PC = 2;
+
+    // -------- subroutines
+
+    function showHideButtonTypeControls(sel_type) {
+        d.getElementById("mom_cc_fields").style.display = (sel_type == SWITCH_PC) ? "none" : "grid";
+        d.getElementById("switch_pc_fields").style.display = (sel_type == SWITCH_PC) ? "grid" : "none";
+    }
+
+    // We do not have a complete set of controls for each button tab.
+    // Instead, we update button-related controls when the button
+    // tab is clicked.
+    //
+    function updateButtonControls() {
+
+        // first, save values from controls to the cfg object
+        if (current_bix != -1) {
+
+            cfg.buttons[current_bix].type = d.querySelector('input[name="btype"]:checked').value;
+
+            cfg.buttons[current_bix].n_progs = d.getElementById("NP").value;
+            cfg.buttons[current_bix].bank = d.getElementById("BK").value;
+            cfg.buttons[current_bix].first_prog = d.getElementById("FP").value;
+            cfg.buttons[current_bix].code = d.getElementById("CC").value;
+            cfg.buttons[current_bix].hue = d.getElementById("HUE").value;
+        }
+
+        // Update controls to match currently selected button tab
+        //
+        let bix = d.querySelector('input[name="btn"]:checked').value;
+        d.querySelector(`input[name="btype"][value="${cfg.buttons[bix].type}"]`).checked = true;
+        d.getElementById("NP").value = cfg.buttons[bix].n_progs;
+        d.getElementById("BK").value = cfg.buttons[bix].bank;
+        d.getElementById("FP").value = cfg.buttons[bix].first_prog;
+        d.getElementById("CC").value = cfg.buttons[bix].code;
+        d.getElementById("HUE").value = cfg.buttons[bix].hue;
+
+        showHideButtonTypeControls(cfg.buttons[bix].type);
+
+        current_bix  = bix;
+    }
+
+    // set config object values into controls.
+    //
+    function cfgToCtrls() {
+        d.getElementById("V").value = cfg.vee;
+        d.getElementById("CH").value = cfg.midi_channel;
+
+        // rebuild button tabs to ensure the button count matches
+        let s = "";
+        for (let i = 0; i < cfg.num_buttons; i++) {
+            s += `<input type="radio" name="btn" id="b${i}" value="${i}" ${i == 0 ? "checked" : ""}/><label for="b${i}">${i + 1}</label>`;
+        }
+        d.getElementById("btn_tabs").innerHTML = s;
+
+        // install tab handlers
+        d.querySelectorAll('input[type="radio"][name="btn"]').forEach(bt => {
+            bt.onclick = e => {
+                updateButtonControls();
+            };
+        });
+
+        current_bix = -1;       // first time only
+        updateButtonControls();
+
+        // un-hide controls once they're populated
+        d.getElementById("cfgbody").style.display="block";
+    }
+
+    // Set controls into config
+    //
+    function ctrlsToCfg() {
+        cfg.vee = d.getElementById("V").value;
+        cfg.midi_channel = d.getElementById("CH").value;
+        updateButtonControls();
+    }
+
+    // compose setcfg msg and send to controller
+    // return null on success or error message
+    //
+    function sendSetCfg() {
+        let msg = [sysexMsg, sysexMfgId, 0x22, devID, 0x35, 0x37, 0x39, 0x32];
+
+        msg.push(cfg.vee);
+        msg.push(cfg.midi_channel);
+        msg.push(cfg.buttons.length);
+
+        for (b of cfg.buttons) {
+            msg.push(b.type);
+            if (b.type == SWITCH_PC) {
+                msg.push(b.n_progs)
+                msg.push(b.bank >> 7);
+                msg.push(b.bank & 0x7F);
+                msg.push(b.first_prog);
+            } else {
+                msg.push(b.code);
+                msg.push(b.hue);
+            }
+        }
+        msg.push(EOX);
+
+        try {
+            mo.send(msg);
+        } catch (err) {
+            return ""+err;
+        }
+        return null;
+    }
+
+    // retrieve config struct; init controls to match
+    //
+    function receiveSetCfg(msg) {
+
+        // check msg length?  todo: review corner-case handling in general.
+        //      message length depends on num_buttons and button types.
+
+        cfg = {};
+        let ix = 8;
+
+        cfg.vee = msg.data[ix++];
+        cfg.midi_channel = msg.data[ix++];
+        cfg.num_buttons = msg.data[ix++];
+        cfg.buttons = [];
+        // check msg length again?
+
+        for (let i = 0; i < cfg.num_buttons; i++) {
+            cfg.buttons[i] = {
+                type: msg.data[ix++],
+                code: 0,
+                hue: 0,
+                n_progs: 2,
+                bank: 0,
+                first_prog: 0
+            };
+            // cfg.buttons[i].type = msg.data[ix++];
+            switch(cfg.buttons[i].type) {
+                case MOMENTARY_CC:
+                case TOGGLE_CC:
+                    cfg.buttons[i].code = msg.data[ix++];
+                    cfg.buttons[i].hue = msg.data[ix++];
+                    break;
+                case SWITCH_PC:
+                    cfg.buttons[i].n_progs = msg.data[ix++];
+                    cfg.buttons[i].bank = ((msg.data[ix++] << 7) | msg.data[ix++]);
+                    cfg.buttons[i].first_prog = msg.data[ix++];
+            }
+        }
+        cfgToCtrls();
+    }
+
+    // we receive a 'setcfg' in response to our 'getcfg' message
+    // ..and we rely on it to update our UI.
+    // todo: we should have a timeout in case we don't receive this
+    // message in a timely fashion.
+    function receiveMidiMsg(msg) {
+
+        // we can safely ignore CC and PC messages; the controller will
+        // send these out when we save the config.
+        if (msg.data.length > 0 &&
+            ((msg.data[0] & 0xF0) == CCMsg || (msg.data[0] & 0xF0) == PCMsg)) {
+            return;
+        }
+
+        // Any other message not matching our signature should trigger an error
+        //
+        if (msg.data.length < 8 ||
+            msg.data[0] != sysexMsg ||
+            msg.data[1] != sysexMfgId ||
+            msg.data[2] != 0x22 ||      // our only valid message
+            msg.data[4] != 0x35 ||      // 4 signature bytes
+            msg.data[5] != 0x37 ||
+            msg.data[6] != 0x39 ||
+            msg.data[7] != 0x32) {
+            alert("Unexpected message received from foot controller.");
+            return;
+        }
+        receiveSetCfg(msg);
+    }
+
+    // request config from controller.
+    // device should respond with setcfg message, triggering UI refresh above.
+    // returns null on success or non-null error message.
+    //
+    function refreshConfig() {
+
+        // get cfg message 0x11
+        let msg = [sysexMsg, sysexMfgId, 0x11, devID, 0x35, 0x37, 0x39, 0x32, EOX];
+        try {
+            mo.send(msg);
+        } catch (err) {
+            alert("Error requesting configuration from foot controller:\n" + err + "\n\nCheck connection and retry");
+        }
+    }
+
+
+    // -------- initialize / install UI handlers
+
+    // Apply min/max constraints to number elements
+    // even when value is entered via keyboard.
+    // thanks to: https://stackoverflow.com/a/67349746
+    d.querySelectorAll('input[type="number"]').forEach(ne => {
+        ne.addEventListener('input', e => {
+            const el = e.target || e
+            let value = parseInt(el.value)
+            el.value = value // for 000 like input cleanup to 0
+            let max = parseInt(el.max)
+            let min = parseInt(el.min)
+            if ( value > max ) el.value = el.max
+            if ( value < min ) el.value = el.min
+        });
+    });
+
+    // Find our device and get config from it.
+    //
+    d.getElementById("refresh").onclick = e => {
+
+        // if we already have an output device; this is just a refresh.
+        if (mo) {
+            refreshConfig();
+        } else {
+            // request access & find our input and output devices
+            navigator.requestMIDIAccess({sysex: true}).then((access) => {
+                // find input and outputobjects
+                access.inputs.forEach(i=> {
+                    if (i.name == devname) {
+                        // attach our input handler;
+                        i.onmidimessage = receiveMidiMsg;
+                    }
+                });
+                access.outputs.forEach(o=> {
+                    if (o.name == devname) {
+                        mo = o;
+                    }
+                });
+                refreshConfig();
+            },
+            (err) => {
+                alert("midi access denied.\nCheck browser settings and retry.");
+                console.log("err: "+ err);
+            });
+        }
+
+
+    };
+
+    // install show/hide handler for button type radio
+    d.querySelectorAll('input[type="radio"][name="btype"]').forEach(bt => {
+        bt.onclick = e => {
+            showHideButtonTypeControls(e.target.value);
+        }
+    });
+
+    // install save handler
+    d.getElementById("save").onclick = e => {
+        ctrlsToCfg();
+        const errmsg = sendSetCfg();
+        if (errmsg) {
+            alert("Error setting config into foot controller:\n" + error + "\n\nCheck connection and retry.");
+        }
+    }
+
+});})();
+        </script>
+    </head>
+    <body>
+        <h3>MIDI Foot Controller Configuration</h3>
+
+        <button id="refresh">(Re)load config from controller</button>
+        <hr/>
+        <div id="cfgbody" style="display:none">
+            <div>
+                <label>LED brightness (V)<input type="number" id="V"  midn="0" max="127" value="0"/></label>
+                <label>Midi Channel index<input type="number" id="CH"  min="1" max="16" value="1"/></label>
+            </div>
+            <h4>Buttons:</h4>
+            <div id="btn_tabs" class="rtabs">
+                <input type="radio" name="btn" id="bix1" checked/>
+                <label for="bix1">1</label>
+
+                <input type="radio" name="btn" id="bix2"/>
+                <label for="bix2">2</label>
+                <input type="radio" name="btn" id="bix3"/>
+                <label for="bix3">3</label>
+                <input type="radio" name="btn" id="bix4"/>
+                <label for="bix4">4</label>
+
+            </div>
+            <div class="tab_body">
+                <div class="radios">
+                    <div>Button Type</div>
+                    <div>
+                        <label><input type="radio" name="btype" value="0"/>Momentary CC</label>
+                        <label><input type="radio" name="btype" value="1"/>Toggle CC</label>
+                        <label><input type="radio" name="btype" value="2"/>Switch PC</label>
+                    </div>
+                </div>
+
+                <div id="mom_cc_fields">
+                    <label>Control Code<input type="number" id="CC"  min="0" max="127" value="99"/></label>
+                    <label>Hue<input type="number" id="HUE"  min="0" max="127" value="99"/></label>
+                </div>
+
+                <div id="switch_pc_fields">
+                    <label>Program count<input type="number" id="NP"  min="2" max="127" value="99"/></label>
+                    <label>Bank index<input type="number" id="BK"  min="0" max="16383" value="99"/></label>
+                    <label>First program index<input type="number" id="FP"  min="0" max="127" value="99"/></label>
+                </div>
+            </div>
+            <button id="save">Save config to controller</button>
+        </div>
+
+    </body>
+</html>
