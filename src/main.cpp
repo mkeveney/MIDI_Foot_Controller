@@ -34,7 +34,7 @@
 // This firwmare was developed in conjunction with a 3D printable
 // project.  See the following link for details:
 //
-//   <todo: add web address of project here> for details.
+// http://keveney.com/posts/midi-foot-controller/
 //
 // This firmware uses the Arduino framework, the MidiUSB library, and the FastLED library.
 // By using this code you agree to abide by the license agreements for each of
